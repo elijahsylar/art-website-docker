@@ -1,0 +1,31 @@
+name: Build and Test Art Website
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t art-website .
+
+      - name: Start containers
+        run: |
+          docker run -d --name art-website -p 8080:80 art-website
+          sleep 3
+
+      - name: Test site is serving
+        run: |
+          curl -f http://localhost:8080 || exit 1
+          echo "Site is up and serving!"
+
+      - name: Stop containers
+        run: docker stop art-website
