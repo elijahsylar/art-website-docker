@@ -1,0 +1,243 @@
+// Shopping Cart Module for Art E-commerce
+// Manages cart state with localStorage persistence
+
+class ShoppingCart {
+    constructor() {
+        this.storageKey = 'art_shopping_cart';
+        this.items = this.loadCart();
+        this.listeners = [];
+    }
+
+    // Load cart from localStorage
+    loadCart() {
+        try {
+            const stored = localStorage.getItem(this.storageKey);
+            return stored ? JSON.parse(stored) : [];
+        } catch (error) {
+            console.error('Error loading cart:', error);
+            return [];
+        }
+    }
+
+    // Save cart to localStorage
+    saveCart() {
+        try {
+            localStorage.setItem(this.storageKey, JSON.stringify(this.items));
+            this.notifyListeners();
+        } catch (error) {
+            console.error('Error saving cart:', error);
+        }
+    }
+
+    // Add item to cart
+    addItem(artwork) {
+        // VALIDATION: Check if original art (ONLY by category or type_count, NOT stockQuantity)
+        const isOriginal = artwork.category === 'original_art';
+        // Check if item already exists
+        const existingIndex = this.items.findIndex(item => item.id === artwork.id);
+        
+        if (existingIndex !== -1) {
+            // VALIDATION: Prevent adding more than 1 original art
+            if (isOriginal) {
+                alert(`"${artwork.title}" is an original piece and is already in your cart. Only 1 can be purchased.`);
+                return false;
+            }
+            
+            // VALIDATION: Check stock limit
+            const newQuantity = this.items[existingIndex].quantity + 1;
+            if (newQuantity > (artwork.stockQuantity || 1)) {
+                alert(`Only ${artwork.stockQuantity} available for "${artwork.title}"`);
+                return false;
+            }
+            
+            // Item exists, increment quantity
+            this.items[existingIndex].quantity += 1;
+        } else {
+            // VALIDATION: Check if sold out
+            if (!artwork.availableForSale || !artwork.is_available || artwork.stockQuantity === 0) {
+                alert(`"${artwork.title}" is sold out`);
+                return false;
+            }
+            
+            // New item, add to cart
+            this.items.push({
+                id: artwork.id,
+                title: artwork.title,
+                price: artwork.price || artwork.base_price || 0,
+                imageUrl: artwork.imageUrl || this.getImageUrl(artwork),
+                quantity: 1,
+                sku: artwork.sku || `ART-${artwork.id}`,
+                stockQuantity: artwork.stockQuantity || 1,
+                isOriginal: isOriginal
+            });
+        }
+        
+        this.saveCart();
+        return true;
+    }
+
+    // Get image URL from artwork
+    getImageUrl(artwork) {
+        try {
+            if (artwork.image?.url) {
+                const url = artwork.image?.formats?.small?.url || artwork.image?.url;
+                // If relative URL, prepend domain
+                return url.startsWith('http') ? url : `https://elijah-sylar.com${url}`;
+            }
+        } catch (error) {
+            console.error('Error getting image URL:', error);
+        }
+        return '/images/placeholder.jpg'; // Fallback image
+    }
+
+    // Remove item from cart
+    removeItem(artworkId) {
+        const index = this.items.findIndex(item => item.id === artworkId);
+        
+        if (index !== -1) {
+            this.items.splice(index, 1);
+            this.saveCart();
+            return true;
+        }
+        
+        return false;
+    }
+
+    // Update item quantity
+    updateQuantity(artworkId, quantity) {
+        const item = this.items.find(item => item.id === artworkId);
+        
+        if (item) {
+            if (quantity <= 0) {
+                // Remove item if quantity is 0 or negative
+                return this.removeItem(artworkId);
+            } else {
+                // VALIDATION: Check if original art
+                if (item.isOriginal && quantity > 1) {
+                    alert(`This is an original artwork. Only 1 can be purchased.`);
+                    return false;
+                }
+                
+                // VALIDATION: Check stock limit
+                if (quantity > (item.stockQuantity || 1)) {
+                    alert(`Only ${item.stockQuantity} available`);
+                    return false;
+                }
+                
+                item.quantity = quantity;
+                this.saveCart();
+                return true;
+            }
+        }
+        
+        return false;
+    }
+
+    // Get all cart items
+    getItems() {
+        return [...this.items];
+    }
+
+    // Get total item count
+    getItemCount() {
+        return this.items.reduce((total, item) => total + item.quantity, 0);
+    }
+
+    // Get cart subtotal
+    getSubtotal() {
+        return this.items.reduce((total, item) => {
+            return total + (item.price * item.quantity);
+        }, 0);
+    }
+
+    // Get formatted subtotal
+    getFormattedSubtotal() {
+        return `$${this.getSubtotal().toFixed(2)}`;
+    }
+
+    // Clear entire cart
+    clearCart() {
+        this.items = [];
+        this.saveCart();
+    }
+
+    // Check if cart is empty
+    isEmpty() {
+        return this.items.length === 0;
+    }
+
+    // Get cart data formatted for checkout API
+    getCheckoutData() {
+        return {
+            items: this.items.map(item => ({
+                artworkId: item.id,
+                quantity: item.quantity,
+                title: item.title,
+                category: item.id >= 900000 ? 'print' : (item.category || ''),
+                isPrint: item.id >= 900000,
+                price: item.price
+            }))
+        };
+    }
+
+    // Validate cart before checkout
+    validateCart() {
+        const errors = [];
+        
+        this.items.forEach(item => {
+            // Check if original art has quantity > 1
+            if (item.isOriginal && item.quantity > 1) {
+                errors.push(`${item.title} is an original piece. Only 1 can be purchased.`);
+            }
+            
+            // Check stock limits
+            if (item.quantity > item.stockQuantity) {
+                errors.push(`Only ${item.stockQuantity} available for ${item.title}`);
+            }
+        });
+        
+        return {
+            isValid: errors.length === 0,
+            errors: errors
+        };
+    }
+
+    // Subscribe to cart changes
+    subscribe(callback) {
+        this.listeners.push(callback);
+        // Return unsubscribe function
+        return () => {
+            this.listeners = this.listeners.filter(listener => listener !== callback);
+        };
+    }
+
+    // Notify all listeners of cart changes
+    notifyListeners() {
+        this.listeners.forEach(callback => {
+            try {
+                callback(this.getCartState());
+            } catch (error) {
+                console.error('Error in cart listener:', error);
+            }
+        });
+    }
+
+    // Get current cart state
+    getCartState() {
+        return {
+            items: this.getItems(),
+            itemCount: this.getItemCount(),
+            subtotal: this.getSubtotal(),
+            formattedSubtotal: this.getFormattedSubtotal(),
+            isEmpty: this.isEmpty()
+        };
+    }
+}
+
+// Create singleton instance
+const cart = new ShoppingCart();
+
+// Export for use in other scripts
+if (typeof module !== 'undefined' && module.exports) {
+    module.exports = cart;
+}
